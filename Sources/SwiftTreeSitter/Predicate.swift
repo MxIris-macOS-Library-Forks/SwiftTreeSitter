@@ -1,5 +1,5 @@
 import Foundation
-import tree_sitter
+import TreeSitter
 
 public enum QueryPredicateStep: Hashable, Sendable {
     case done
@@ -79,12 +79,14 @@ public enum Predicate: Hashable, Sendable {
 
 extension Predicate {
 	public typealias TextProvider = (NSRange, Range<Point>) -> String?
+	public typealias TextSnapshotProvider = @Sendable (NSRange, Range<Point>) -> String?
 	public typealias GroupMembershipProvider = (String, NSRange, Range<Point>) -> Bool
 
 	public struct Context {
 		public let textProvider: TextProvider
 		public let groupMembershipProvider: GroupMembershipProvider
 
+		@MainActor
 		public static let none = Context(textProvider: { _, _ in return nil })
 
 		public init(

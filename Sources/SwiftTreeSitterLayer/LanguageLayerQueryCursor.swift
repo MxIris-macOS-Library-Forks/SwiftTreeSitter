@@ -4,50 +4,106 @@ import SwiftTreeSitter
 import enum SwiftTreeSitter.Predicate
 
 public struct LanguageLayerQueryCursor {
-	let baseCursor: QueryCursor
-	let range: NSRange
-	let name: String
+	public struct Target {
+		let tree: Tree
+		let query: Query
+		let depth: Int
+		let name: String
+	}
 
-	init(cursor: QueryCursor, range: NSRange, name: String) {
-		self.baseCursor = cursor
-		self.name = name
-		self.range = range
+	private let ranges: [NSRange]
+	public let target: Target
+	private var activeCursor: QueryCursor?
+	private var index: Int
 
-		cursor.setRange(range)
+	init(target: LanguageLayerQueryCursor.Target, set: IndexSet) {
+		self.target = target
+		self.ranges = set.rangeView.compactMap({ NSRange($0) })
+		self.index = ranges.index(before: ranges.startIndex)
+
+		advanceRange()
 	}
 }
 
 extension LanguageLayerQueryCursor: Sequence, IteratorProtocol {
 	public typealias Element = QueryMatch
 
+	private mutating func advanceRange() {
+		self.index += 1
+		guard index < ranges.endIndex else {
+			self.activeCursor = nil
+			return
+		}
+
+		let range = ranges[index]
+
+		self.activeCursor = target.query.execute(in: target.tree, depth: target.depth)
+
+		self.activeCursor?.setRange(range)
+	}
+
 	public mutating func next() -> Element? {
-		baseCursor.next()
+		while activeCursor != nil {
+			if let match = activeCursor?.next() {
+				return match
+			}
+
+			// our match has returned nil, do we need to advance to the next range?
+			self.advanceRange()
+		}
+
+		return nil
 	}
 }
 
 public struct LanguageTreeQueryCursor {
-	private var subcursors: [LanguageLayerQueryCursor]
+	private var activeCursor: LanguageLayerQueryCursor?
+	private let targets: [LanguageLayerQueryCursor.Target]
+	private var index: Int
+	private var set: IndexSet
 
-	init(subcursors: [LanguageLayerQueryCursor]) {
-		self.subcursors = subcursors
-	}
+	init(set: IndexSet, targets: [LanguageLayerQueryCursor.Target]) {
+		self.set = set
+		self.targets = targets
+		self.index = targets.index(before: targets.startIndex)
 
-	mutating func merge(with other: LanguageTreeQueryCursor) {
-		subcursors.append(contentsOf: other.subcursors)
+		advanceCursor()
 	}
 }
 
 extension LanguageTreeQueryCursor: Sequence, IteratorProtocol {
 	public typealias Element = QueryMatch
 
+	private mutating func advanceCursor() {
+		self.index += 1
+		guard index < targets.endIndex else {
+			self.activeCursor = nil
+			return
+		}
+
+		self.activeCursor = LanguageLayerQueryCursor(target: targets[index], set: set)
+	}
+
+	private mutating func expandSet(_ range: NSRange?) {
+		if let range = range {
+			self.set.formUnion(IndexSet(integersIn: range))
+		}
+	}
+
 	public mutating func next() -> Element? {
-		// this is not efficient
-		for cursor in subcursors {
-			if let match = cursor.baseCursor.next() {
+		while activeCursor != nil {
+			if let match = activeCursor?.next() {
+				// matches can occur outside of our target and can affect sublayer queries
+				expandSet(match.range)
+
 				return match
 			}
+
+			// our match has returned nil, do we need to advance to the next cursor?
+			self.advanceCursor()
 		}
 
 		return nil
 	}
+
 }

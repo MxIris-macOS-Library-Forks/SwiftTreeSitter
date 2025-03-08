@@ -1,8 +1,8 @@
 import Foundation
 
-import tree_sitter
+import TreeSitter
 
-/// A structure that holds a language name and its assoicated queries.
+/// A structure that holds a language name and its associated queries.
 public struct LanguageData: Sendable {
 	public let name: String
 	public let queries: [Query.Definition: Query]
@@ -13,16 +13,23 @@ public struct LanguageData: Sendable {
 	}
 }
 
-/// A structure that holds a language parser, name, and its assoicated queries.
+enum LanguageConfigurationError: Error {
+	case queryDirectoryNotFound
+	case queryDirectoryNotReadable(URL)
+}
+
+/// A structure that holds a language parser, name, and its associated queries.
 public struct LanguageConfiguration: Sendable {
 	public let language: Language
 	public let data: LanguageData
 
+	/// Create a configuration with the language parser reference and details about its queries.
 	public init(_ language: Language, data: LanguageData) {
 		self.language = language
 		self.data = data
 	}
 
+	/// Create a configuration with the language parser reference, a name, and the query definitions.
 	public init(_ language: Language, name: String, queries: [Query.Definition: Query]) {
 		self.language = language
 		self.data = LanguageData(name: name, queries: queries)
@@ -39,13 +46,14 @@ public struct LanguageConfiguration: Sendable {
 
 #if !os(WASI)
 extension LanguageConfiguration {
-    public init(_ tsLanguage: UnsafePointer<TSLanguage>, name: String, queries: [Query.Definition: Query]) {
+	/// Create a configuration with a pointer to the language parser structure, a name, and the query definitions.
+	public init(_ tsLanguage: OpaquePointer, name: String, queries: [Query.Definition: Query]) {
         self.init(Language(tsLanguage), name: name, queries: queries)
     }
 
     /// Create a configuration with a name assumed to match a bundle.
     ///
-    /// The bundle must be nested within resources and follow the pattern `TreeSitter\(name)_TreeSitter\(name)`.
+	/// When using SPM to build and package tree-sitter parsers, at build time a bundle will be created for the package. Typically, this bundle will also include the query definition `.scm` files, via its `resources` property. This initializer can be used **if** the parser name and bundle follow the pattern `TreeSitter\(name)_TreeSitter\(name)`.
 	public init(_ language: Language, name: String) throws {
 		let bundleName = "TreeSitter\(name)_TreeSitter\(name)"
 
@@ -53,50 +61,72 @@ extension LanguageConfiguration {
 	}
 
     /// Create a configuration with a name assumed to match a bundle.
-    ///
-    /// The bundle must be nested within resources and follow the pattern `TreeSitter\(name)_TreeSitter\(name)`.
-	public init(_ tsLanguage: UnsafePointer<TSLanguage>, name: String) throws {
+	///
+	/// When using SPM to build and package tree-sitter parsers, at build time a bundle will be created for the package. Typically, this bundle will also include the query definition `.scm` files, via its `resources` property. This initializer can be used **if** the parser name and bundle follow the pattern `TreeSitter\(name)_TreeSitter\(name)`.
+	public init(_ tsLanguage: OpaquePointer, name: String) throws {
 		try self.init(Language(tsLanguage), name: name)
 	}
 
+	/// Create a configuration with a name and an independent bundle name.
+	///
+	/// When using SPM to build and package tree-sitter parsers, at build time a bundle will be created for the package. Typically, this bundle will also include the query definition `.scm` files, via its `resources` property. This initializer is good option if the package output bundle's naming convention doesn't follow a common pattern. This frequently happens when on parser package includes more than one parser implementation.
 	public init(_ language: Language, name: String, bundleName: String) throws {
-		let queriesURL = Self.bundleQueriesDirectoryURL(for: bundleName)
-		let queries = try queriesURL.flatMap { try Query.queries(for: language, in: $0) } ?? [:]
+		guard let queriesURL = Self.bundleQueriesDirectoryURL(for: bundleName) else {
+			throw LanguageConfigurationError.queryDirectoryNotFound
+		}
+
+		let path = queriesURL.standardizedFileURL.path
+
+		if FileManager.default.isReadableFile(atPath: path) == false {
+			throw LanguageConfigurationError.queryDirectoryNotReadable(queriesURL)
+		}
+
+		let queries = try Query.queries(for: language, in: queriesURL)
 
 		self.init(language, name: name, queries: queries)
 	}
 
-	public init(_ tsLanguage: UnsafePointer<TSLanguage>, name: String, bundleName: String) throws {
+	/// Create a configuration with a name, and an independent bundle name.
+	public init(_ tsLanguage: OpaquePointer, name: String, bundleName: String) throws {
 		try self.init(Language(tsLanguage), name: name, bundleName: bundleName)
 	}
 
+	/// Create a configuration a name and a url to a directory of query definition files.
+	///
+	/// This is a more-general way to initialize configuration objects. It is useful if the query definitions you'd like to use are not part of a parser package, or if their on-disk layout doesn't match the heuristics used for the more automated initializers.
 	public init(_ language: Language, name: String, queriesURL: URL) throws {
 		let queries = try Query.queries(for: language, in: queriesURL)
 
 		self.init(language, name: name, queries: queries)
 	}
 
-	public init(_ tsLanguage: UnsafePointer<TSLanguage>, name: String, queriesURL: URL) throws {
+	/// Create a configuration with a pointer to the language parser structure, a name, and a url to a directory of query definition files.
+	///
+	/// This is a more-general way to initialize configuration objects. It is useful if the query definitions you'd like to use are not part of a parser package, or if their on-disk layout doesn't match the heuristics used for the more automated initializers.
+	public init(_ tsLanguage: OpaquePointer, name: String, queriesURL: URL) throws {
 		try self.init(Language(tsLanguage), name: name, queriesURL: queriesURL)
 	}
 }
 
 extension LanguageConfiguration {
-	static let effectiveBundle: Bundle = {
+	static let bundleContainerURL: URL? = {
 		let mainBundle = Bundle.main
 
 		guard mainBundle.isXCTestRunner else {
-			return mainBundle
+			return mainBundle.resourceURL
 		}
 
-		return Bundle.testBundle ?? mainBundle
+		// we have to go up one directory, because Xcode puts SPM dependency bundles
+		return Bundle.testBundle?.bundleURL.deletingLastPathComponent()
 	}()
 
 	static func bundleQueriesDirectoryURL(for bundleName: String) -> URL? {
-		effectiveBundle
-			.resourceURL?
-			.appendingPathComponent("\(bundleName).bundle", isDirectory: true)
-			.appendingPathComponent("Contents/Resources/queries", isDirectory: true)
+        let bundlePath = bundleContainerURL?.appendingPathComponent("\(bundleName).bundle", isDirectory: true)
+#if os(iOS) || os(tvOS) || os(visionOS) || os(watchOS)
+        return bundlePath?.appendingPathComponent("queries", isDirectory: true)
+#else
+        return bundlePath?.appendingPathComponent("Contents/Resources/queries", isDirectory: true)
+#endif
 	}
 }
 

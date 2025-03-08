@@ -39,15 +39,54 @@ targets: [
     .target(
         name: "MySwiftTreeSitterTarget",
         dependencies: ["SwiftTreeSitter"]
-	),
+    ),
     .target(
         name: "MySwiftTreeSitterLayerTarget",
         dependencies: [
             .product(name: "SwiftTreeSitterLayer", package: "SwiftTreeSitter"),
-		]
-	),
+        ]
+    ),
 ]
 ```
+
+## Range Translation
+
+The tree-sitter runtime operates on raw string data. This means it works with bytes, and is string-encoding-sensitive. Swift's `String` type is an abstraction on top of raw data and cannot be used directly. To overcome this, you also have to be aware of the types of indexes you are using and how string data is translated back and forth.
+
+To help, SwiftTreeSitter supports the base tree-sitter encoding facilities. You can control this via `Parser.parse(tree:encoding:readBlock:)`. But, by default this will assume UTF-16-encoded data. This is done to offer direct compatibility with Foundation strings and `NSRange`, which both use UTF-16.
+
+Also, to help with all the back and forth, SwiftTreeSitter includes some accessors that are NSRange-based, as well as extension on `NSRange`. These **must** be used when working with the native tree-sitter types unless you take care to handle encoding yourself.
+
+To keep things clear, consistent naming and types are used. `Node.byteRange` returns a `Range<UInt32>`, which is an encoding-dependent value. `Node.range` is an `NSRange` which is defined to use UTF-16.
+    
+```swift
+let node = tree.rootNode!
+
+// this is encoding-dependent and cannot be used with your storage
+node.byteRange
+
+// this is a UTF-16-assumed translation of the byte ranges
+node.range
+
+// converting UTF-16-based changed ranges on re-parse
+let ranges: [NSRange] = newtree.changedRanges(from: oldTree)
+    .map{ $0.bytes.range }
+```
+
+## Query Conflicts
+
+SwiftTreeSitter does its best to resolve poor/incorrect query constructs, which are surprisingly common.
+
+When using injections, child query ranges are automatically expanded using parent matches. This handles cases where a parent has queries that overlap with children in conflicting ways. Without expansion, it is possible to construct queries that fall within children ranges but produce on parent matches.
+
+All matches are sorted by:
+
+- depth
+- location in content
+- specificity of match label (more components => more specific)
+- occurrence in the query source
+
+Even with these, it is possible to produce queries that will result in "incorrect" behavior that are either ambiguous or undefined in the query definition.
 
 ## Highlighting
 
@@ -55,7 +94,7 @@ A very common use of tree-sitter is to do syntax highlighting. It is possible to
 
 First, check out how it works with SwiftTreeSitterLayer. It's complex, but does a lot for you.
 
-```swift
+````swift
 // LanguageConfiguration takes care of finding and loading queries in SPM-created bundles.
 let markdownConfig = try LanguageConfiguration(tree_sitter_markdown(), name: "Markdown")
 let markdownInlineConfig = try LanguageConfiguration(
@@ -109,7 +148,7 @@ let highlights = try rootLayer.highlights(in: fullRange, provider: textProvider)
 for namedRange in highlights {
     print("\(namedRange.name): \(namedRange.range)")
 }
-```
+````
 
 You can also use SwiftTreeSitter directly:
 
@@ -172,6 +211,7 @@ Here's a list of parsers that support SPM. Since you're here, you might find tha
 | [OCaml](https://github.com/tree-sitter/tree-sitter-ocaml) | | ✅ | ✅ |
 | [Perl](https://github.com/ganezdragon/tree-sitter-perl) | | ✅ | ✅ |
 | [PHP](https://github.com/tree-sitter/tree-sitter-php) | ✅ | ✅ | ✅ |
+| [Pkl](https://github.com/apple/tree-sitter-pkl) | | ✅ | ✅ |
 | [Python](https://github.com/tree-sitter/tree-sitter-python) | | ✅ | ✅ |
 | [Ruby](https://github.com/tree-sitter/tree-sitter-ruby) | ✅ | ✅ | ✅ |
 | [Rust](https://github.com/tree-sitter/tree-sitter-rust) | | ✅ | ✅ |
@@ -196,11 +236,11 @@ I prefer indentation with tabs for improved accessibility. But, I'd rather you u
 
 By participating in this project you agree to abide by the [Contributor Code of Conduct](CODE_OF_CONDUCT.md).
 
-[build status]: https://github.com/ChimeHQ/SwiftTreeSitter/actions
-[build status badge]: https://github.com/ChimeHQ/SwiftTreeSitter/workflows/CI/badge.svg
-[platforms]: https://swiftpackageindex.com/ChimeHQ/SwiftTreeSitter
-[platforms badge]: https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2FChimeHQ%2FSwiftTreeSitter%2Fbadge%3Ftype%3Dplatforms
-[documentation]: https://swiftpackageindex.com/ChimeHQ/SwiftTreeSitter/main/documentation
+[build status]: https://github.com/tree-sitter/swift-tree-sitter/actions
+[build status badge]: https://github.com/tree-sitter/swift-tree-sitter/workflows/CI/badge.svg
+[platforms]: https://swiftpackageindex.com/tree-sitter/swift-tree-sitter
+[platforms badge]: https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Ftree-sitter%2Fswift-tree-sitter%2Fbadge%3Ftype%3Dplatforms
+[documentation]: https://swiftpackageindex.com/tree-sitter/swift-tree-sitter/main/documentation
 [documentation badge]: https://img.shields.io/badge/Documentation-DocC-blue
 [discord]: https://discord.gg/esFpX6sErJ
 [discord badge]: https://img.shields.io/badge/Discord-purple?logo=Discord&label=Chat&color=%235A64EC
